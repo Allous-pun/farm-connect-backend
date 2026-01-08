@@ -189,11 +189,21 @@ const login = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phone: user.phone,
         roles: user.roles,
+        bio: user.bio,
+        farm: user.farm,
         location: {
           name: user.location?.name,
           coordinates: user.coordinates.coordinates,
+          county: user.location?.address?.county,
+          town: user.location?.address?.town
         },
+        profileStatus: user.profileStatus,
+        isVerified: user.isVerified,
+        ratings: user.ratings || [],
+        averageRating: user.averageRating || 0,
+        totalTransactions: user.totalTransactions || 0
       },
     });
   } catch (error) {
@@ -206,32 +216,122 @@ const login = async (req, res) => {
    GET PROFILE
 ====================================================== */
 const getProfile = async (req, res) => {
-  const user = await User.findById(req.user.id);
-  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+  try {
+    const user = await User.findById(req.user.id)
+      .select('-password -__v');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
 
-  res.json({ success: true, user });
+    // Prepare response with all user data
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      roles: user.roles,
+      bio: user.bio,
+      farm: user.farm,
+      location: {
+        name: user.location?.name,
+        coordinates: user.coordinates?.coordinates || [0, 0],
+        county: user.location?.address?.county,
+        town: user.location?.address?.town
+      },
+      profileStatus: user.profileStatus,
+      isVerified: user.isVerified,
+      ratings: user.ratings || [],
+      averageRating: user.averageRating || 0,
+      transactions: user.transactions || [],
+      totalTransactions: user.totalTransactions || 0,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+
+    res.json({
+      success: true,
+      user: userResponse
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
 };
 
 /* ======================================================
    UPDATE PROFILE
 ====================================================== */
 const updateProfile = async (req, res) => {
-  const { name, phone, location } = req.body;
-  const update = {};
-  if (name) update.name = name;
-  if (phone) update.phone = phone;
+  try {
+    const { name, phone, location } = req.body;
+    const update = {};
+    
+    if (name) update.name = name;
+    if (phone) update.phone = phone;
 
-  if (location) {
-    const parsed = parseLocationData(location);
-    update.location = parsed.location;
-    update.coordinates = {
-      type: 'Point',
-      coordinates: [Number(parsed.coordinates.coordinates[0]), Number(parsed.coordinates.coordinates[1])],
-    };
+    if (location) {
+      const parsed = parseLocationData(location);
+      update.location = parsed.location;
+      update.coordinates = {
+        type: 'Point',
+        coordinates: [Number(parsed.coordinates.coordinates[0]), Number(parsed.coordinates.coordinates[1])],
+      };
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id, 
+      update, 
+      { new: true, runValidators: true }
+    ).select('-password -__v');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        roles: user.roles,
+        bio: user.bio,
+        farm: user.farm,
+        location: {
+          name: user.location?.name,
+          coordinates: user.coordinates?.coordinates || [0, 0],
+          county: user.location?.address?.county,
+          town: user.location?.address?.town
+        },
+        profileStatus: user.profileStatus,
+        isVerified: user.isVerified,
+        ratings: user.ratings || [],
+        averageRating: user.averageRating || 0,
+        transactions: user.transactions || [],
+        totalTransactions: user.totalTransactions || 0,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
   }
-
-  const user = await User.findByIdAndUpdate(req.user.id, update, { new: true, runValidators: true });
-  res.json({ success: true, user });
 };
 
 /* ======================================================
@@ -267,6 +367,214 @@ const getNearbyUsers = async (req, res) => {
 };
 
 /* ======================================================
+   GET USER BY ID
+====================================================== */
+const getUserById = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select('-password -__v');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        roles: user.roles,
+        bio: user.bio,
+        farm: user.farm,
+        location: {
+          name: user.location?.name,
+          coordinates: user.coordinates?.coordinates || [0, 0],
+          county: user.location?.address?.county,
+          town: user.location?.address?.town
+        },
+        profileStatus: user.profileStatus,
+        isVerified: user.isVerified,
+        ratings: user.ratings || [],
+        averageRating: user.averageRating || 0,
+        totalTransactions: user.totalTransactions || 0,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Get user by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   SUBMIT RATING FOR USER
+====================================================== */
+const submitRating = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { rating, comment } = req.body;
+    const userId = req.params.id;
+    const raterId = req.user.id;
+
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Prevent self-rating
+    if (userId === raterId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot rate yourself'
+      });
+    }
+
+    // Create rating object
+    const newRating = {
+      id: `r-${Date.now()}`,
+      fromUserId: raterId,
+      rating: parseInt(rating),
+      comment: comment || '',
+      date: new Date().toISOString()
+    };
+
+    // Initialize ratings array if it doesn't exist
+    if (!user.ratings) {
+      user.ratings = [];
+    }
+
+    // Add rating
+    user.ratings.push(newRating);
+
+    // Calculate new average rating
+    const totalRatings = user.ratings.length;
+    const sumRatings = user.ratings.reduce((sum, r) => sum + r.rating, 0);
+    user.averageRating = sumRatings / totalRatings;
+
+    // Save updated user
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Rating submitted successfully',
+      rating: newRating,
+      averageRating: user.averageRating
+    });
+  } catch (error) {
+    console.error('Submit rating error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   UPDATE USER PROFILE WITH BIO AND FARM INFO
+====================================================== */
+const updateProfileDetails = async (req, res) => {
+  try {
+    const { name, phone, bio, farm } = req.body;
+    const updateData = {};
+
+    if (name) updateData.name = name;
+    if (phone) updateData.phone = phone;
+    if (bio) updateData.bio = bio;
+    if (farm) updateData.farm = farm;
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        roles: user.roles,
+        bio: user.bio,
+        farm: user.farm,
+        location: {
+          name: user.location?.name,
+          coordinates: user.coordinates?.coordinates || [0, 0],
+          county: user.location?.address?.county,
+          town: user.location?.address?.town
+        },
+        profileStatus: user.profileStatus,
+        isVerified: user.isVerified,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Update profile details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   GET USER RATINGS
+====================================================== */
+const getUserRatings = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select('ratings averageRating name');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      ratings: user.ratings || [],
+      averageRating: user.averageRating || 0,
+      userName: user.name
+    });
+  } catch (error) {
+    console.error('Get user ratings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
    LOGOUT
 ====================================================== */
 const logout = (req, res) => res.json({ success: true, message: 'Logged out' });
@@ -279,4 +587,8 @@ module.exports = {
   updateLocation,
   getNearbyUsers,
   logout,
+  getUserById,
+  submitRating,
+  updateProfileDetails,
+  getUserRatings
 };

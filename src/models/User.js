@@ -120,6 +120,113 @@ const UserSchema = new mongoose.Schema(
     },
 
     isVerified: { type: Boolean, default: false },
+
+    // Add these fields to your UserSchema (after the existing fields):
+
+    // Bio field
+    bio: {
+      type: String,
+      trim: true,
+      maxlength: 500
+    },
+
+    // Farm information
+    farm: {
+      size: {
+        type: String,
+        trim: true
+      },
+      mainCrops: [{
+        type: String,
+        trim: true
+      }],
+      equipment: [{
+        type: String,
+        trim: true
+      }],
+      yearsFarming: {
+        type: Number,
+        min: 0
+      }
+    },
+
+    // Ratings system
+    ratings: [{
+      id: {
+        type: String,
+        required: true
+      },
+      fromUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+      },
+      rating: {
+        type: Number,
+        required: true,
+        min: 1,
+        max: 5
+      },
+      comment: {
+        type: String,
+        trim: true,
+        maxlength: 500
+      },
+      date: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+
+    averageRating: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    },
+
+    // Transaction history (simplified for now)
+    transactions: [{
+      id: {
+        type: String,
+        required: true
+      },
+      type: {
+        type: String,
+        enum: ['sale', 'purchase', 'transport', 'storage'],
+        required: true
+      },
+      product: {
+        type: String,
+        required: true
+      },
+      quantity: {
+        type: Number,
+        required: true
+      },
+      unit: {
+        type: String,
+        required: true
+      },
+      price: {
+        type: Number,
+        required: true
+      },
+      date: {
+        type: Date,
+        default: Date.now
+      },
+      status: {
+        type: String,
+        enum: ['pending', 'completed', 'cancelled'],
+        default: 'completed'
+      }
+    }],
+
+    totalTransactions: {
+      type: Number,
+      default: 0
+    }
   },
   { timestamps: true }
 );
