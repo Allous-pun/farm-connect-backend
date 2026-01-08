@@ -4,28 +4,24 @@ const { validationResult } = require('express-validator');
 
 // Helper function to parse location data
 const parseLocationData = (location) => {
-  if (!location) return null;
+  if (!location) return {};
+  
+  const result = {};
   
   // If location is a string, treat it as location name
   if (typeof location === 'string') {
-    return {
-      name: location,
-      coordinates: {
-        type: 'Point',
-        coordinates: [36.8172, -1.2864] // Default Kenya coordinates
-      },
-      address: {}
+    result.location = { name: location };
+    result.coordinates = {
+      type: 'Point',
+      coordinates: [36.8172, -1.2864] // Default Kenya coordinates
     };
+    return result;
   }
   
   // If location is an object with lat/lng
   if (location.lat && location.lng) {
-    return {
+    result.location = {
       name: location.name || 'Your Location',
-      coordinates: {
-        type: 'Point',
-        coordinates: [location.lng, location.lat]
-      },
       address: {
         county: location.county,
         subCounty: location.subCounty,
@@ -35,10 +31,22 @@ const parseLocationData = (location) => {
       },
       landmark: location.landmark
     };
+    result.coordinates = {
+      type: 'Point',
+      coordinates: [location.lng, location.lat] // Note: MongoDB expects [longitude, latitude]
+    };
+    return result;
   }
   
   // If already in proper format
-  return location;
+  if (location.coordinates) {
+    result.coordinates = location.coordinates;
+  }
+  if (location.name || location.address || location.landmark) {
+    result.location = location;
+  }
+  
+  return result;
 };
 
 // @desc    Register user
@@ -73,7 +81,7 @@ const register = async (req, res) => {
       name,
       phone,
       roles: roles || ['farmer'],
-      location: locationData
+      ...locationData // Spread the location data (includes both location and coordinates)
     });
 
     // Generate token
@@ -91,7 +99,7 @@ const register = async (req, res) => {
         roles: user.roles,
         location: {
           name: user.location?.name,
-          coordinates: user.location?.coordinates?.coordinates || [0, 0],
+          coordinates: user.coordinates?.coordinates || [0, 0], // Use coordinates field
           county: user.location?.address?.county,
           town: user.location?.address?.town
         },
@@ -164,7 +172,7 @@ const login = async (req, res) => {
         roles: user.roles,
         location: {
           name: user.location?.name,
-          coordinates: user.location?.coordinates?.coordinates || [0, 0],
+          coordinates: user.coordinates?.coordinates || [0, 0], // Use coordinates field
           county: user.location?.address?.county,
           town: user.location?.address?.town
         },
@@ -206,7 +214,7 @@ const getProfile = async (req, res) => {
         roles: user.roles,
         location: {
           name: user.location?.name,
-          coordinates: user.location?.coordinates?.coordinates || [0, 0],
+          coordinates: user.coordinates?.coordinates || [0, 0], // Use coordinates field
           address: user.location?.address || {},
           landmark: user.location?.landmark
         },
@@ -242,7 +250,8 @@ const updateProfile = async (req, res) => {
     if (name) updateData.name = name;
     if (phone) updateData.phone = phone;
     if (location) {
-      updateData.location = parseLocationData(location);
+      const locationData = parseLocationData(location);
+      Object.assign(updateData, locationData);
     }
 
     const user = await User.findByIdAndUpdate(
@@ -269,7 +278,7 @@ const updateProfile = async (req, res) => {
         roles: user.roles,
         location: {
           name: user.location?.name,
-          coordinates: user.location?.coordinates?.coordinates || [0, 0],
+          coordinates: user.coordinates?.coordinates || [0, 0], // Use coordinates field
           county: user.location?.address?.county,
           town: user.location?.address?.town
         },
@@ -304,14 +313,14 @@ const updateLocation = async (req, res) => {
     const updateData = {
       location: {
         name: name || 'Your Location',
-        coordinates: {
-          type: 'Point',
-          coordinates: [lng, lat] // Note: MongoDB expects [longitude, latitude]
-        },
         address: {
           county: county || '',
           town: town || ''
         }
+      },
+      coordinates: {
+        type: 'Point',
+        coordinates: [lng, lat] // Note: MongoDB expects [longitude, latitude]
       }
     };
 
@@ -333,7 +342,7 @@ const updateLocation = async (req, res) => {
       message: 'Location updated successfully',
       location: {
         name: user.location?.name,
-        coordinates: user.location?.coordinates?.coordinates,
+        coordinates: user.coordinates?.coordinates,
         county: user.location?.address?.county,
         town: user.location?.address?.town
       }
@@ -363,7 +372,7 @@ const getNearbyUsers = async (req, res) => {
     }
 
     const query = {
-      'location.coordinates': {
+      coordinates: { // Use coordinates field, not location.coordinates
         $near: {
           $geometry: {
             type: 'Point',
@@ -382,7 +391,7 @@ const getNearbyUsers = async (req, res) => {
     }
 
     const users = await User.find(query)
-      .select('name email phone roles location profileStatus')
+      .select('name email phone roles location coordinates profileStatus')
       .limit(parseInt(limit));
 
     res.json({
@@ -394,8 +403,7 @@ const getNearbyUsers = async (req, res) => {
         roles: user.roles,
         location: {
           name: user.location?.name,
-          coordinates: user.location?.coordinates?.coordinates,
-          distance: user.distance // This will be available if using .aggregate() with $geoNear
+          coordinates: user.coordinates?.coordinates // Use coordinates field
         },
         profileStatus: user.profileStatus
       }))

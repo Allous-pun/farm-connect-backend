@@ -42,18 +42,6 @@ const UserSchema = new mongoose.Schema({
       type: String,
       trim: true
     },
-    // Coordinates for map display and geospatial queries
-    coordinates: {
-      type: {
-        type: String,
-        enum: ['Point'],
-        default: 'Point'
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-        default: [36.8172, -1.2864] // Default to Kenya coordinates
-      }
-    },
     // Address details
     address: {
       county: {
@@ -83,6 +71,18 @@ const UserSchema = new mongoose.Schema({
       trim: true
     }
   },
+  // Separate field for geospatial coordinates
+  coordinates: {
+    type: {
+      type: String,
+      enum: ['Point'],
+      default: 'Point'
+    },
+    coordinates: {
+      type: [Number], // [longitude, latitude]
+      default: [36.8172, -1.2864] // Default to Kenya coordinates
+    }
+  },
   profileStatus: {
     type: String,
     enum: ['active', 'pending', 'suspended', 'verified'],
@@ -102,8 +102,8 @@ const UserSchema = new mongoose.Schema({
   }
 });
 
-// Geospatial index for location queries
-UserSchema.index({ 'location.coordinates': '2dsphere' });
+// Geospatial index for coordinates queries
+UserSchema.index({ coordinates: '2dsphere' });
 
 // Hash password before saving
 UserSchema.pre('save', async function(next) {
@@ -131,12 +131,12 @@ UserSchema.methods.comparePassword = async function(candidatePassword) {
 
 // Virtual for formatted location
 UserSchema.virtual('formattedLocation').get(function() {
-  if (this.location.name) return this.location.name;
+  if (this.location?.name) return this.location.name;
   
   const parts = [];
-  if (this.location.address?.county) parts.push(this.location.address.county);
-  if (this.location.address?.town) parts.push(this.location.address.town);
-  if (this.location.address?.subCounty) parts.push(this.location.address.subCounty);
+  if (this.location?.address?.county) parts.push(this.location.address.county);
+  if (this.location?.address?.town) parts.push(this.location.address.town);
+  if (this.location?.address?.subCounty) parts.push(this.location.address.subCounty);
   
   return parts.length > 0 ? parts.join(', ') : 'Location not specified';
 });
