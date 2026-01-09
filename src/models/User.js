@@ -223,6 +223,19 @@ const UserSchema = new mongoose.Schema(
       }
     }],
 
+    // ===============================
+    // Listing references
+    // ===============================
+    activeListings: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Listing'
+    }],
+
+    closedListings: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Listing'
+    }],
+
     totalTransactions: {
       type: Number,
       default: 0
@@ -245,6 +258,21 @@ UserSchema.pre('save', async function (next) {
 // Password comparison
 UserSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
+};
+
+// Listing helpers
+UserSchema.methods.addListing = async function(listingId) {
+  this.activeListings.push(listingId);
+  await this.save();
+};
+
+UserSchema.methods.closeListing = async function(listingId) {
+  const index = this.activeListings.indexOf(listingId);
+  if (index > -1) {
+    this.activeListings.splice(index, 1);
+    this.closedListings.push(listingId);
+    await this.save();
+  }
 };
 
 // Virtual: formatted location
