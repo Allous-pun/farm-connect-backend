@@ -50,7 +50,6 @@ const COUNTY_COORDS = {
   "West Pokot": [35.5000, 1.2333],
 };
 
-
 const UserSchema = new mongoose.Schema(
   {
     email: {
@@ -121,8 +120,6 @@ const UserSchema = new mongoose.Schema(
 
     isVerified: { type: Boolean, default: false },
 
-    // Add these fields to your UserSchema (after the existing fields):
-
     // Bio field
     bio: {
       type: String,
@@ -130,23 +127,110 @@ const UserSchema = new mongoose.Schema(
       maxlength: 500
     },
 
-    // Farm information
-    farm: {
-      size: {
-        type: String,
-        trim: true
+    // Role-specific information
+    roleSpecificInfo: {
+      // For farmers
+      farmer: {
+        farmSize: {
+          type: String,
+          trim: true
+        },
+        mainCrops: [{
+          type: String,
+          trim: true
+        }],
+        equipment: [{
+          type: String,
+          trim: true
+        }],
+        yearsFarming: {
+          type: Number,
+          min: 0
+        },
+        certifications: [{
+          type: String,
+          trim: true
+        }],
+        farmType: {
+          type: String,
+          enum: ['small-scale', 'medium-scale', 'large-scale', 'cooperative'],
+          trim: true
+        }
       },
-      mainCrops: [{
-        type: String,
-        trim: true
-      }],
-      equipment: [{
-        type: String,
-        trim: true
-      }],
-      yearsFarming: {
-        type: Number,
-        min: 0
+      
+      // For transporters
+      transport: {
+        vehicleType: {
+          type: String,
+          enum: ['truck', 'van', 'pickup', 'lorry', 'refrigerated', 'motorcycle', 'other'],
+          trim: true
+        },
+        capacity: {
+          type: Number, // in kg
+          min: 0
+        },
+        licensePlate: {
+          type: String,
+          trim: true
+        },
+        availability: {
+          type: Boolean,
+          default: true
+        },
+        serviceAreas: [{
+          type: String,
+          trim: true
+        }],
+        refrigeration: {
+          type: Boolean,
+          default: false
+        },
+        insurance: {
+          type: Boolean,
+          default: false
+        },
+        licenseNumber: {
+          type: String,
+          trim: true
+        }
+      },
+      
+      // For storage providers
+      storage: {
+        facilityType: {
+          type: String,
+          enum: ['warehouse', 'cold-storage', 'silo', 'barn', 'container', 'other'],
+          trim: true
+        },
+        totalCapacity: {
+          type: Number, // in kg
+          min: 0
+        },
+        availableCapacity: {
+          type: Number,
+          min: 0
+        },
+        temperatureControlled: {
+          type: Boolean,
+          default: false
+        },
+        temperatureRange: {
+          min: { type: Number },
+          max: { type: Number }
+        },
+        securityFeatures: [{
+          type: String,
+          trim: true
+        }],
+        services: [{
+          type: String,
+          enum: ['storage', 'packaging', 'sorting', 'grading', 'drying', 'fumigation'],
+          trim: true
+        }],
+        certifications: [{
+          type: String,
+          trim: true
+        }]
       }
     },
 
@@ -175,6 +259,10 @@ const UserSchema = new mongoose.Schema(
       date: {
         type: Date,
         default: Date.now
+      },
+      roleContext: {  // Which role was being rated (if user has multiple)
+        type: String,
+        enum: ['farmer', 'transport', 'storage']
       }
     }],
 
@@ -185,7 +273,23 @@ const UserSchema = new mongoose.Schema(
       max: 5
     },
 
-    // Transaction history (simplified for now)
+    // Role-specific average ratings
+    roleRatings: {
+      farmer: {
+        average: { type: Number, default: 0, min: 0, max: 5 },
+        count: { type: Number, default: 0 }
+      },
+      transport: {
+        average: { type: Number, default: 0, min: 0, max: 5 },
+        count: { type: Number, default: 0 }
+      },
+      storage: {
+        average: { type: Number, default: 0, min: 0, max: 5 },
+        count: { type: Number, default: 0 }
+      }
+    },
+
+    // Transaction history
     transactions: [{
       id: {
         type: String,
@@ -220,6 +324,10 @@ const UserSchema = new mongoose.Schema(
         type: String,
         enum: ['pending', 'completed', 'cancelled'],
         default: 'completed'
+      },
+      roleInvolved: {
+        type: String,
+        enum: ['farmer', 'transport', 'storage']
       }
     }],
 
@@ -247,6 +355,11 @@ const UserSchema = new mongoose.Schema(
 // 2dsphere index for GeoJSON queries
 UserSchema.index({ coordinates: '2dsphere' });
 
+// Index for role-based queries
+UserSchema.index({ roles: 1 });
+UserSchema.index({ 'roleSpecificInfo.transport.availability': 1 });
+UserSchema.index({ 'roleSpecificInfo.storage.availableCapacity': 1 });
+
 // Password hashing
 UserSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
@@ -258,6 +371,57 @@ UserSchema.pre('save', async function (next) {
 // Password comparison
 UserSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
+};
+
+// Role-specific methods
+UserSchema.methods.hasRole = function(role) {
+  return this.roles.includes(role);
+};
+
+UserSchema.methods.getRoleInfo = function(role) {
+  return this.roleSpecificInfo ? this.roleSpecificInfo[role] : null;
+};
+
+UserSchema.methods.updateRoleInfo = function(role, data) {
+  if (!this.roleSpecificInfo) {
+    this.roleSpecificInfo = {};
+  }
+  this.roleSpecificInfo[role] = { ...this.roleSpecificInfo[role], ...data };
+  return this.save();
+};
+
+// Add rating with role context
+UserSchema.methods.addRating = async function(ratingData) {
+  const newRating = {
+    id: `r-${Date.now()}`,
+    fromUserId: ratingData.fromUserId,
+    rating: ratingData.rating,
+    comment: ratingData.comment || '',
+    date: new Date(),
+    roleContext: ratingData.roleContext || null
+  };
+
+  this.ratings.push(newRating);
+
+  // Update overall average rating
+  const totalRatings = this.ratings.length;
+  const sumRatings = this.ratings.reduce((sum, r) => sum + r.rating, 0);
+  this.averageRating = sumRatings / totalRatings;
+
+  // Update role-specific rating if roleContext provided
+  if (ratingData.roleContext && ['farmer', 'transport', 'storage'].includes(ratingData.roleContext)) {
+    const role = ratingData.roleContext;
+    const roleRatings = this.ratings.filter(r => r.roleContext === role);
+    
+    if (roleRatings.length > 0) {
+      const roleSum = roleRatings.reduce((sum, r) => sum + r.rating, 0);
+      this.roleRatings[role].average = roleSum / roleRatings.length;
+      this.roleRatings[role].count = roleRatings.length;
+    }
+  }
+
+  await this.save();
+  return newRating;
 };
 
 // Listing helpers
@@ -283,6 +447,11 @@ UserSchema.virtual('formattedLocation').get(function () {
   if (this.location?.address?.town) parts.push(this.location.address.town);
   if (this.location?.address?.county) parts.push(this.location.address.county);
   return parts.length ? parts.join(', ') : 'Location not specified';
+});
+
+// Virtual: primary role (first role in array)
+UserSchema.virtual('primaryRole').get(function () {
+  return this.roles[0] || 'farmer';
 });
 
 module.exports = mongoose.model('User', UserSchema);

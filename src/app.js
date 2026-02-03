@@ -8,6 +8,8 @@ const authRoutes = require('./routes/auth.routes');
 const listingRoutes = require('./routes/listing.routes');
 const chatRoutes = require('./routes/chat.routes');
 const webhookRoutes = require('./routes/webhook.routes'); 
+const transportRoutes = require('./routes/transport.routes');
+const storageRoutes = require('./routes/storage.routes');
 
 const app = express();
 
@@ -26,6 +28,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/listings', listingRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/transports', transportRoutes);
+app.use('/api/storages', storageRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {

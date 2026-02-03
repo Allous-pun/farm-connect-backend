@@ -1,6 +1,7 @@
-// src/controllers/listing.controller.js
 const Listing = require('../models/Listing');
 const User = require('../models/User');
+const Transport = require('../models/Transport');
+const Storage = require('../models/Storage');
 const mongoose = require('mongoose');
 const { webhookService } = require('../services/webhookService');
 
@@ -74,6 +75,25 @@ function getCountyCoordinates(countyName) {
   return COUNTY_COORDS['Nairobi'];
 }
 
+// Helper function to calculate distance
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) {
+    return 0;
+  }
+  
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c;
+  
+  return Math.round(distance * 100) / 100;
+}
+
 // @desc    Get listings with filters
 // @route   GET /api/listings
 // @access  Private
@@ -86,6 +106,8 @@ exports.getListings = async (req, res) => {
       county,
       urgency,
       owner,
+      needsTransport,
+      needsStorage,
       page = 1,
       limit = 20,
       sortBy = 'createdAt',
@@ -110,9 +132,10 @@ exports.getListings = async (req, res) => {
     if (category) query.category = category;
     if (urgency) query.urgency = urgency;
     if (county) query['locationDetails.county'] = { $regex: county, $options: 'i' };
+    if (needsTransport) query['requirements.needsTransport'] = needsTransport === 'true';
+    if (needsStorage) query['requirements.needsStorage'] = needsStorage === 'true';
     
-    // Owner filter - if provided, show specific user's listings
-    // If not provided and user is not admin, show only active listings (excluding user's own)
+    // Owner filter
     if (owner) {
       query.owner = owner;
     } else if (!req.user.roles.includes('admin')) {
@@ -130,7 +153,10 @@ exports.getListings = async (req, res) => {
     // Execute query with pagination
     const listings = await Listing.find(query)
       .populate('owner', 'name roles averageRating profileStatus')
+      .populate('transportBooking', 'title route')
+      .populate('storageBooking', 'title locationDetails')
       .populate('matchedWith', 'name')
+      .populate('matchedListing', 'title category')
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
@@ -138,7 +164,7 @@ exports.getListings = async (req, res) => {
     // Get total count for pagination
     const total = await Listing.countDocuments(query);
 
-    // Calculate distances for each listing (if user coordinates available)
+    // Calculate distances for each listing
     const user = await User.findById(req.user.id);
     const listingsWithDistance = listings.map(listing => {
       const listingObj = listing.toObject();
@@ -178,11 +204,19 @@ exports.getListings = async (req, res) => {
   }
 };
 
-// @desc    Create a new listing
+// @desc    Create a new listing (only farmers can create)
 // @route   POST /api/listings
 // @access  Private
 exports.createListing = async (req, res) => {
   try {
+    // Check if user has farmer role
+    if (!req.user.roles.includes('farmer')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only users with farmer role can create product listings'
+      });
+    }
+
     const { 
       title, 
       description, 
@@ -191,6 +225,7 @@ exports.createListing = async (req, res) => {
       productDetails, 
       price, 
       locationDetails,
+      requirements,
       urgency,
       expiryDays = 7
     } = req.body;
@@ -198,21 +233,19 @@ exports.createListing = async (req, res) => {
     // Get user's location
     const user = await User.findById(req.user.id);
     
-    // Check if user already has an active listing in same category (Section 8)
-    if (category !== 'transport' && category !== 'storage') {
-      const existingActiveListing = await Listing.findOne({
-        owner: req.user.id,
-        category,
-        status: 'active',
-        expiryDate: { $gt: new Date() }
-      });
+    // Check if user already has an active listing in same category
+    const existingActiveListing = await Listing.findOne({
+      owner: req.user.id,
+      category,
+      status: 'active',
+      expiryDate: { $gt: new Date() }
+    });
 
-      if (existingActiveListing) {
-        return res.status(400).json({
-          success: false,
-          message: `You already have an active ${category} listing. Please close it before creating a new one.`
-        });
-      }
+    if (existingActiveListing) {
+      return res.status(400).json({
+        success: false,
+        message: `You already have an active ${category} listing. Please close it before creating a new one.`
+      });
     }
 
     // Calculate expiry date
@@ -236,6 +269,7 @@ exports.createListing = async (req, res) => {
       category,
       productDetails,
       price,
+      requirements,
       urgency: urgency || 'medium',
       owner: req.user.id,
       location: {
@@ -249,9 +283,11 @@ exports.createListing = async (req, res) => {
       expiryDate
     });
 
-    // Add tags based on type and category
+    // Add tags
     listing.tags = [type, category];
     if (urgency) listing.tags.push(urgency);
+    if (requirements?.needsTransport) listing.tags.push('needs-transport');
+    if (requirements?.needsStorage) listing.tags.push('needs-storage');
 
     await listing.save();
 
@@ -271,7 +307,7 @@ exports.createListing = async (req, res) => {
   }
 };
 
-// @desc    Get nearby listings (Section 5)
+// @desc    Get nearby listings
 // @route   GET /api/listings/nearby
 // @access  Private
 exports.getNearbyListings = async (req, res) => {
@@ -283,6 +319,8 @@ exports.getNearbyListings = async (req, res) => {
       type,
       category,
       urgency,
+      needsTransport,
+      needsStorage,
       sortBy = 'distance',
       limit = 50
     } = req.query;
@@ -316,6 +354,8 @@ exports.getNearbyListings = async (req, res) => {
     if (type) query.type = type;
     if (category) query.category = category;
     if (urgency) query.urgency = urgency;
+    if (needsTransport) query['requirements.needsTransport'] = needsTransport === 'true';
+    if (needsStorage) query['requirements.needsStorage'] = needsStorage === 'true';
 
     // Build sort
     let sort = {};
@@ -371,6 +411,204 @@ exports.getNearbyListings = async (req, res) => {
   }
 };
 
+// @desc    Get listings needing transport services
+// @route   GET /api/listings/needing-transport
+// @access  Private (Transporters)
+exports.getListingsNeedingTransport = async (req, res) => {
+  try {
+    // Check if user has transport role
+    if (!req.user.roles.includes('transport')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporters can access this endpoint'
+      });
+    }
+
+    const { 
+      county,
+      maxDistance = 50000,
+      minQuantity,
+      category,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    // Get user's location
+    const user = await User.findById(req.user.id);
+    const userCoords = user.coordinates.coordinates;
+
+    const query = {
+      'requirements.needsTransport': true,
+      status: 'active',
+      expiryDate: { $gt: new Date() },
+      owner: { $ne: req.user.id } // Exclude own listings
+    };
+
+    // Location filter
+    if (county) {
+      query['locationDetails.county'] = { $regex: county, $options: 'i' };
+    } else {
+      // Filter by distance from transporter
+      query.location = {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: userCoords
+          },
+          $maxDistance: parseInt(maxDistance)
+        }
+      };
+    }
+
+    // Other filters
+    if (minQuantity) {
+      query['productDetails.quantity'] = { $gte: parseFloat(minQuantity) };
+    }
+    if (category) {
+      query.category = category;
+    }
+
+    // Pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const listings = await Listing.find(query)
+      .populate('owner', 'name roles averageRating locationDetails')
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Listing.countDocuments(query);
+
+    // Calculate distances
+    const listingsWithDistance = listings.map(listing => {
+      const listingObj = listing.toObject();
+      listingObj.distance = calculateDistance(
+        userCoords[1], userCoords[0],
+        listing.location.coordinates[1], listing.location.coordinates[0]
+      );
+      return listingObj;
+    });
+
+    res.json({
+      success: true,
+      count: listings.length,
+      total,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      },
+      data: listingsWithDistance
+    });
+
+  } catch (error) {
+    console.error('Get listings needing transport error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching listings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get listings needing storage services
+// @route   GET /api/listings/needing-storage
+// @access  Private (Storage providers)
+exports.getListingsNeedingStorage = async (req, res) => {
+  try {
+    // Check if user has storage role
+    if (!req.user.roles.includes('storage')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only storage providers can access this endpoint'
+      });
+    }
+
+    const { 
+      county,
+      maxDistance = 50000,
+      minQuantity,
+      category,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    // Get user's location
+    const user = await User.findById(req.user.id);
+    const userCoords = user.coordinates.coordinates;
+
+    const query = {
+      'requirements.needsStorage': true,
+      status: 'active',
+      expiryDate: { $gt: new Date() },
+      owner: { $ne: req.user.id } // Exclude own listings
+    };
+
+    // Location filter
+    if (county) {
+      query['locationDetails.county'] = { $regex: county, $options: 'i' };
+    } else {
+      // Filter by distance from storage provider
+      query.location = {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: userCoords
+          },
+          $maxDistance: parseInt(maxDistance)
+        }
+      };
+    }
+
+    // Other filters
+    if (minQuantity) {
+      query['productDetails.quantity'] = { $gte: parseFloat(minQuantity) };
+    }
+    if (category) {
+      query.category = category;
+    }
+
+    // Pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const listings = await Listing.find(query)
+      .populate('owner', 'name roles averageRating locationDetails')
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Listing.countDocuments(query);
+
+    // Calculate distances
+    const listingsWithDistance = listings.map(listing => {
+      const listingObj = listing.toObject();
+      listingObj.distance = calculateDistance(
+        userCoords[1], userCoords[0],
+        listing.location.coordinates[1], listing.location.coordinates[0]
+      );
+      return listingObj;
+    });
+
+    res.json({
+      success: true,
+      count: listings.length,
+      total,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      },
+      data: listingsWithDistance
+    });
+
+  } catch (error) {
+    console.error('Get listings needing storage error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching listings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 // @desc    Get user's listings
 // @route   GET /api/listings/my-listings
 // @access  Private
@@ -411,6 +649,8 @@ exports.getListing = async (req, res) => {
   try {
     const listing = await Listing.findById(req.params.id)
       .populate('owner', 'name roles averageRating phone bio farm.yearsFarming')
+      .populate('transportBooking', 'title route vehicleDetails pricing')
+      .populate('storageBooking', 'title locationDetails facilityDetails pricing')
       .populate('matchedWith', 'name phone')
       .populate('matchedListing', 'title category');
 
@@ -472,7 +712,7 @@ exports.updateListing = async (req, res) => {
     // Update only allowed fields
     const allowedUpdates = [
       'title', 'description', 'productDetails', 'price', 
-      'urgency', 'locationDetails', 'images', 'tags'
+      'requirements', 'urgency', 'locationDetails', 'images', 'tags'
     ];
     
     allowedUpdates.forEach(field => {
@@ -485,6 +725,15 @@ exports.updateListing = async (req, res) => {
     if (req.body.locationDetails?.county && req.body.locationDetails.county !== listing.locationDetails?.county) {
       const newCoordinates = getCountyCoordinates(req.body.locationDetails.county);
       listing.location.coordinates = newCoordinates;
+    }
+
+    // Update tags based on requirements
+    if (req.body.requirements) {
+      const tagsToUpdate = [listing.type, listing.category];
+      if (listing.urgency) tagsToUpdate.push(listing.urgency);
+      if (listing.requirements?.needsTransport) tagsToUpdate.push('needs-transport');
+      if (listing.requirements?.needsStorage) tagsToUpdate.push('needs-storage');
+      listing.tags = tagsToUpdate;
     }
 
     await listing.save();
@@ -505,7 +754,7 @@ exports.updateListing = async (req, res) => {
   }
 };
 
-// @desc    Close listing (Section 8)
+// @desc    Close listing
 // @route   PUT /api/listings/:id/close
 // @access  Private
 exports.closeListing = async (req, res) => {
@@ -597,7 +846,7 @@ exports.markAsMatched = async (req, res) => {
   }
 };
 
-// @desc    Contact listing owner (Simple version - will be replaced with chat later)
+// @desc    Contact listing owner
 // @route   POST /api/listings/:id/contact
 // @access  Private
 exports.contactOwner = async (req, res) => {
@@ -851,54 +1100,124 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   }
   
   const R = 6371; // Earth's radius in kilometers
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
   const a = 
     Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
     Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   const distance = R * c;
   
-  // Round to 2 decimal places
   return Math.round(distance * 100) / 100;
 }
 
-function toRad(degrees) {
-  return degrees * (Math.PI/180);
-}
-
-// @desc    Debug: Get all listings (temporary for testing)
-// @route   GET /api/listings/debug/all
-// @access  Private (admin only for now)
-exports.debugGetAllListings = async (req, res) => {
+// @desc    Get recommended transport services for a listing
+// @route   GET /api/listings/:id/recommended-transports
+// @access  Private (Listing owner only)
+exports.getRecommendedTransports = async (req, res) => {
   try {
-    const listings = await Listing.find({})
-      .populate('owner', 'name email')
-      .sort('-createdAt');
+    const listing = await Listing.findById(req.params.id);
+
+    if (!listing) {
+      return res.status(404).json({
+        success: false,
+        message: 'Listing not found'
+      });
+    }
+
+    // Check ownership
+    if (listing.owner.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view recommended transports for this listing'
+      });
+    }
+
+    // Find transports that match the listing's needs
+    const query = {
+      'route.from.county': listing.locationDetails?.county || { $exists: true },
+      'route.to.county': { $regex: '.*', $options: 'i' }, // Can go anywhere
+      'vehicleDetails.capacity': { $gte: listing.productDetails?.quantity || 0 },
+      status: 'available',
+      expiryDate: { $gt: new Date() },
+      owner: { $ne: req.user.id } // Don't recommend own transports
+    };
+
+    // If listing specifies destination, filter by that
+    if (listing.requirements?.transportDistance) {
+      // Add distance-based filtering if needed
+    }
+
+    const transports = await Transport.find(query)
+      .populate('owner', 'name roles averageRating roleSpecificInfo.transport')
+      .limit(10);
 
     res.json({
       success: true,
-      count: listings.length,
-      data: listings.map(l => ({
-        id: l._id,
-        title: l.title,
-        category: l.category,
-        status: l.status,
-        owner: l.owner?.name,
-        expiryDate: l.expiryDate,
-        isExpired: l.isExpired,
-        timeRemaining: l.timeRemaining,
-        coordinates: l.location.coordinates
-      }))
+      count: transports.length,
+      data: transports
     });
 
   } catch (error) {
-    console.error('Debug get all listings error:', error);
+    console.error('Get recommended transports error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching listings',
-      error: error.message
+      message: 'Error fetching recommended transports',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get recommended storage facilities for a listing
+// @route   GET /api/listings/:id/recommended-storages
+// @access  Private (Listing owner only)
+exports.getRecommendedStorages = async (req, res) => {
+  try {
+    const listing = await Listing.findById(req.params.id);
+
+    if (!listing) {
+      return res.status(404).json({
+        success: false,
+        message: 'Listing not found'
+      });
+    }
+
+    // Check ownership
+    if (listing.owner.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view recommended storages for this listing'
+      });
+    }
+
+    // Find storage facilities that match the listing's needs
+    const query = {
+      'locationDetails.county': listing.locationDetails?.county || { $exists: true },
+      'facilityDetails.availableCapacity': { $gte: listing.productDetails?.quantity || 0 },
+      acceptedProducts: listing.category,
+      availability: { $in: ['available', 'partially_available'] },
+      status: 'active',
+      expiryDate: { $gt: new Date() },
+      owner: { $ne: req.user.id } // Don't recommend own storage
+    };
+
+    const storages = await Storage.find(query)
+      .populate('owner', 'name roles averageRating roleSpecificInfo.storage')
+      .limit(10);
+
+    res.json({
+      success: true,
+      count: storages.length,
+      data: storages
+    });
+
+  } catch (error) {
+    console.error('Get recommended storages error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching recommended storages',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

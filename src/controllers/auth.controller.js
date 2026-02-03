@@ -104,6 +104,58 @@ const parseLocationData = (location) => {
   return { location: {}, coordinates };
 };
 
+/**
+ * Format user response with role-specific data
+ */
+const formatUserResponse = (user) => {
+  const baseResponse = {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    roles: user.roles,
+    primaryRole: user.primaryRole,
+    bio: user.bio,
+    location: {
+      name: user.location?.name,
+      coordinates: user.coordinates?.coordinates || [0, 0],
+      county: user.location?.address?.county,
+      town: user.location?.address?.town
+    },
+    profileStatus: user.profileStatus,
+    isVerified: user.isVerified,
+    ratings: user.ratings || [],
+    averageRating: user.averageRating || 0,
+    roleRatings: user.roleRatings || {
+      farmer: { average: 0, count: 0 },
+      transport: { average: 0, count: 0 },
+      storage: { average: 0, count: 0 }
+    },
+    transactions: user.transactions || [],
+    totalTransactions: user.totalTransactions || 0,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt
+  };
+
+  // Add role-specific info
+  if (user.roleSpecificInfo) {
+    baseResponse.roleInfo = {};
+    
+    if (user.roles.includes('farmer') && user.roleSpecificInfo.farmer) {
+      baseResponse.roleInfo.farmer = user.roleSpecificInfo.farmer;
+    }
+    
+    if (user.roles.includes('transport') && user.roleSpecificInfo.transport) {
+      baseResponse.roleInfo.transport = user.roleSpecificInfo.transport;
+    }
+    
+    if (user.roles.includes('storage') && user.roleSpecificInfo.storage) {
+      baseResponse.roleInfo.storage = user.roleSpecificInfo.storage;
+    }
+  }
+
+  return baseResponse;
+};
 
 /* ======================================================
    REGISTER
@@ -113,7 +165,19 @@ const register = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { email, password, name, phone, roles, location } = req.body;
+    const { email, password, name, phone, roles, location, roleInfo } = req.body;
+
+    // Validate roles
+    const validRoles = ['farmer', 'transport', 'storage', 'admin'];
+    if (roles) {
+      const invalidRoles = roles.filter(role => !validRoles.includes(role));
+      if (invalidRoles.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid roles: ${invalidRoles.join(', ')}`
+        });
+      }
+    }
 
     const userExists = await User.findOne({ email });
     if (userExists) return res.status(400).json({ success: false, message: 'User already exists with this email' });
@@ -126,6 +190,18 @@ const register = async (req, res) => {
       coordinates: [Number(coordinates.coordinates[0]), Number(coordinates.coordinates[1])],
     };
 
+    // Prepare role-specific info
+    const roleSpecificInfo = {};
+    if (roleInfo) {
+      const userRoles = roles || ['farmer'];
+      
+      userRoles.forEach(role => {
+        if (roleInfo[role]) {
+          roleSpecificInfo[role] = roleInfo[role];
+        }
+      });
+    }
+
     const user = await User.create({
       email,
       password,
@@ -134,6 +210,7 @@ const register = async (req, res) => {
       roles: roles || ['farmer'],
       location: loc,
       coordinates: cleanCoordinates,
+      roleSpecificInfo
     });
 
     const token = generateToken(user._id, user.roles);
@@ -142,21 +219,7 @@ const register = async (req, res) => {
       success: true,
       message: 'User registered successfully',
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        roles: user.roles,
-        location: {
-          name: user.location?.name,
-          coordinates: user.coordinates.coordinates,
-          county: user.location?.address?.county,
-          town: user.location?.address?.town,
-        },
-        profileStatus: user.profileStatus,
-        isVerified: user.isVerified,
-      },
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error('Registration error:', error);
@@ -185,26 +248,7 @@ const login = async (req, res) => {
     res.json({
       success: true,
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        roles: user.roles,
-        bio: user.bio,
-        farm: user.farm,
-        location: {
-          name: user.location?.name,
-          coordinates: user.coordinates.coordinates,
-          county: user.location?.address?.county,
-          town: user.location?.address?.town
-        },
-        profileStatus: user.profileStatus,
-        isVerified: user.isVerified,
-        ratings: user.ratings || [],
-        averageRating: user.averageRating || 0,
-        totalTransactions: user.totalTransactions || 0
-      },
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -227,34 +271,9 @@ const getProfile = async (req, res) => {
       });
     }
 
-    // Prepare response with all user data
-    const userResponse = {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      roles: user.roles,
-      bio: user.bio,
-      farm: user.farm,
-      location: {
-        name: user.location?.name,
-        coordinates: user.coordinates?.coordinates || [0, 0],
-        county: user.location?.address?.county,
-        town: user.location?.address?.town
-      },
-      profileStatus: user.profileStatus,
-      isVerified: user.isVerified,
-      ratings: user.ratings || [],
-      averageRating: user.averageRating || 0,
-      transactions: user.transactions || [],
-      totalTransactions: user.totalTransactions || 0,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt
-    };
-
     res.json({
       success: true,
-      user: userResponse
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error('Get profile error:', error);
@@ -301,32 +320,140 @@ const updateProfile = async (req, res) => {
     res.json({
       success: true,
       message: 'Profile updated successfully',
-      user: {
+      user: formatUserResponse(user)
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   UPDATE ROLE-SPECIFIC PROFILE
+====================================================== */
+const updateRoleProfile = async (req, res) => {
+  try {
+    const { role, data } = req.body;
+    const userId = req.user.id;
+    
+    // Validate role
+    if (!['farmer', 'transport', 'storage'].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role specified'
+      });
+    }
+    
+    // Check if user has this role
+    const user = await User.findById(userId);
+    if (!user.roles.includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: `User doesn't have ${role} role`
+      });
+    }
+    
+    // Update role-specific data
+    const updatedUser = await user.updateRoleInfo(role, data);
+    
+    res.json({
+      success: true,
+      message: `${role} profile updated successfully`,
+      user: formatUserResponse(updatedUser)
+    });
+    
+  } catch (error) {
+    console.error('Update role profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   GET USERS BY ROLE
+====================================================== */
+const getUsersByRole = async (req, res) => {
+  try {
+    const { role } = req.params;
+    const { lat, lng, maxDistance = 50000, available } = req.query;
+    
+    // Validate role
+    if (!['farmer', 'transport', 'storage'].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role specified'
+      });
+    }
+    
+    let query = { 
+      roles: role, 
+      profileStatus: { $in: ['active', 'verified'] } 
+    };
+    
+    // Add role-specific filters
+    if (role === 'transport' && available === 'true') {
+      query['roleSpecificInfo.transport.availability'] = true;
+    }
+    
+    if (role === 'storage' && available === 'true') {
+      query['roleSpecificInfo.storage.availableCapacity'] = { $gt: 0 };
+    }
+    
+    // Add location filter if coordinates provided
+    if (lat && lng) {
+      query.coordinates = {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [Number(lng), Number(lat)]
+          },
+          $maxDistance: Number(maxDistance)
+        }
+      };
+    }
+    
+    const users = await User.find(query)
+      .select('name email phone roles location coordinates profileStatus roleSpecificInfo averageRating roleRatings totalTransactions')
+      .limit(50);
+    
+    const formattedUsers = users.map(user => {
+      const baseUser = {
         id: user._id,
         name: user.name,
         email: user.email,
         phone: user.phone,
         roles: user.roles,
-        bio: user.bio,
-        farm: user.farm,
-        location: {
-          name: user.location?.name,
-          coordinates: user.coordinates?.coordinates || [0, 0],
-          county: user.location?.address?.county,
-          town: user.location?.address?.town
-        },
+        location: user.location,
+        coordinates: user.coordinates?.coordinates || [0, 0],
         profileStatus: user.profileStatus,
-        isVerified: user.isVerified,
-        ratings: user.ratings || [],
-        averageRating: user.averageRating || 0,
-        transactions: user.transactions || [],
-        totalTransactions: user.totalTransactions || 0,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt
+        averageRating: user.averageRating,
+        roleSpecificRating: user.roleRatings?.[role]?.average || 0,
+        ratingCount: user.roleRatings?.[role]?.count || 0,
+        totalTransactions: user.totalTransactions || 0
+      };
+      
+      // Add role-specific info
+      if (user.roleSpecificInfo && user.roleSpecificInfo[role]) {
+        baseUser.roleInfo = user.roleSpecificInfo[role];
       }
+      
+      return baseUser;
     });
+    
+    res.json({
+      success: true,
+      count: formattedUsers.length,
+      role: role,
+      users: formattedUsers
+    });
+    
   } catch (error) {
-    console.error('Update profile error:', error);
+    console.error('Get users by role error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -348,22 +475,63 @@ const updateLocation = async (req, res) => {
     { new: true }
   );
 
-  res.json({ success: true, location: { name: user.location?.name, coordinates: user.coordinates.coordinates } });
+  res.json({ 
+    success: true, 
+    location: { 
+      name: user.location?.name, 
+      coordinates: user.coordinates.coordinates,
+      county: user.location?.address?.county,
+      town: user.location?.address?.town
+    } 
+  });
 };
 
 /* ======================================================
    NEARBY USERS
 ====================================================== */
 const getNearbyUsers = async (req, res) => {
-  const { lat, lng, maxDistance = 5000 } = req.query;
+  const { lat, lng, maxDistance = 5000, role } = req.query;
   if (!lat || !lng) return res.status(400).json({ success: false, message: 'Latitude and longitude required' });
 
-  const users = await User.find({
-    coordinates: { $near: { $geometry: { type: 'Point', coordinates: [Number(lng), Number(lat)] }, $maxDistance: Number(maxDistance) } },
+  const query = {
+    coordinates: { 
+      $near: { 
+        $geometry: { 
+          type: 'Point', 
+          coordinates: [Number(lng), Number(lat)] 
+        }, 
+        $maxDistance: Number(maxDistance) 
+      } 
+    },
     profileStatus: { $in: ['active', 'verified'] },
-  }).select('name roles location coordinates');
+  };
 
-  res.json({ success: true, users });
+  // Filter by role if specified
+  if (role && ['farmer', 'transport', 'storage'].includes(role)) {
+    query.roles = role;
+  }
+
+  const users = await User.find(query)
+    .select('name roles location coordinates profileStatus roleSpecificInfo averageRating')
+    .limit(30);
+
+  res.json({ 
+    success: true, 
+    count: users.length,
+    users: users.map(user => ({
+      id: user._id,
+      name: user.name,
+      roles: user.roles,
+      primaryRole: user.primaryRole,
+      location: {
+        name: user.location?.name,
+        coordinates: user.coordinates.coordinates,
+        county: user.location?.address?.county
+      },
+      profileStatus: user.profileStatus,
+      averageRating: user.averageRating
+    }))
+  });
 };
 
 /* ======================================================
@@ -383,28 +551,7 @@ const getUserById = async (req, res) => {
 
     res.json({
       success: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        roles: user.roles,
-        bio: user.bio,
-        farm: user.farm,
-        location: {
-          name: user.location?.name,
-          coordinates: user.coordinates?.coordinates || [0, 0],
-          county: user.location?.address?.county,
-          town: user.location?.address?.town
-        },
-        profileStatus: user.profileStatus,
-        isVerified: user.isVerified,
-        ratings: user.ratings || [],
-        averageRating: user.averageRating || 0,
-        totalTransactions: user.totalTransactions || 0,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt
-      }
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error('Get user by ID error:', error);
@@ -416,7 +563,7 @@ const getUserById = async (req, res) => {
 };
 
 /* ======================================================
-   SUBMIT RATING FOR USER
+   SUBMIT RATING FOR USER WITH ROLE CONTEXT
 ====================================================== */
 const submitRating = async (req, res) => {
   try {
@@ -425,7 +572,7 @@ const submitRating = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { rating, comment } = req.body;
+    const { rating, comment, roleContext } = req.body;
     const userId = req.params.id;
     const raterId = req.user.id;
 
@@ -446,36 +593,49 @@ const submitRating = async (req, res) => {
       });
     }
 
-    // Create rating object
-    const newRating = {
-      id: `r-${Date.now()}`,
-      fromUserId: raterId,
-      rating: parseInt(rating),
-      comment: comment || '',
-      date: new Date().toISOString()
-    };
+    // Validate roleContext if provided
+    if (roleContext && !['farmer', 'transport', 'storage'].includes(roleContext)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role context'
+      });
+    }
 
-    // Initialize ratings array if it doesn't exist
-    if (!user.ratings) {
-      user.ratings = [];
+    // Check if user has the role being rated
+    if (roleContext && !user.roles.includes(roleContext)) {
+      return res.status(400).json({
+        success: false,
+        message: `User doesn't have ${roleContext} role`
+      });
+    }
+
+    // Check if rater has already rated this user for this role
+    const existingRating = user.ratings.find(r => 
+      r.fromUserId.toString() === raterId && 
+      r.roleContext === roleContext
+    );
+
+    if (existingRating) {
+      return res.status(400).json({
+        success: false,
+        message: `You have already rated this user as ${roleContext || 'general'}`
+      });
     }
 
     // Add rating
-    user.ratings.push(newRating);
-
-    // Calculate new average rating
-    const totalRatings = user.ratings.length;
-    const sumRatings = user.ratings.reduce((sum, r) => sum + r.rating, 0);
-    user.averageRating = sumRatings / totalRatings;
-
-    // Save updated user
-    await user.save();
+    const newRating = await user.addRating({
+      fromUserId: raterId,
+      rating: parseInt(rating),
+      comment: comment || '',
+      roleContext: roleContext || null
+    });
 
     res.json({
       success: true,
       message: 'Rating submitted successfully',
       rating: newRating,
-      averageRating: user.averageRating
+      averageRating: user.averageRating,
+      roleSpecificRating: roleContext ? user.roleRatings[roleContext] : null
     });
   } catch (error) {
     console.error('Submit rating error:', error);
@@ -515,25 +675,7 @@ const updateProfileDetails = async (req, res) => {
     res.json({
       success: true,
       message: 'Profile updated successfully',
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        roles: user.roles,
-        bio: user.bio,
-        farm: user.farm,
-        location: {
-          name: user.location?.name,
-          coordinates: user.coordinates?.coordinates || [0, 0],
-          county: user.location?.address?.county,
-          town: user.location?.address?.town
-        },
-        profileStatus: user.profileStatus,
-        isVerified: user.isVerified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt
-      }
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error('Update profile details error:', error);
@@ -545,13 +687,156 @@ const updateProfileDetails = async (req, res) => {
 };
 
 /* ======================================================
-   GET USER RATINGS
+   GET USER RATINGS WITH ROLE FILTER
 ====================================================== */
 const getUserRatings = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
-      .select('ratings averageRating name');
+    const { role } = req.query;
     
+    const user = await User.findById(req.params.id)
+      .select('ratings averageRating roleRatings name roles');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    let filteredRatings = user.ratings || [];
+    
+    // Filter by role if specified
+    if (role && ['farmer', 'transport', 'storage'].includes(role)) {
+      filteredRatings = filteredRatings.filter(rating => rating.roleContext === role);
+    }
+
+    // Populate fromUserId with user details
+    const populatedRatings = await Promise.all(
+      filteredRatings.map(async (rating) => {
+        const rater = await User.findById(rating.fromUserId)
+          .select('name roles');
+        return {
+          ...rating.toObject(),
+          fromUser: rater ? {
+            id: rater._id,
+            name: rater.name,
+            primaryRole: rater.primaryRole
+          } : null
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      ratings: populatedRatings,
+      averageRating: user.averageRating || 0,
+      roleRatings: user.roleRatings || {
+        farmer: { average: 0, count: 0 },
+        transport: { average: 0, count: 0 },
+        storage: { average: 0, count: 0 }
+      },
+      userName: user.name,
+      userRoles: user.roles,
+      filteredByRole: role || 'all'
+    });
+  } catch (error) {
+    console.error('Get user ratings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   GET ROLE-SPECIFIC STATS
+====================================================== */
+const getRoleStats = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const stats = {
+      roles: user.roles,
+      roleInfo: {},
+      roleStats: {}
+    };
+
+    // Add role-specific info and stats
+    user.roles.forEach(role => {
+      if (user.roleSpecificInfo && user.roleSpecificInfo[role]) {
+        stats.roleInfo[role] = user.roleSpecificInfo[role];
+      }
+      
+      if (user.roleRatings && user.roleRatings[role]) {
+        stats.roleStats[role] = user.roleRatings[role];
+      } else {
+        stats.roleStats[role] = { average: 0, count: 0 };
+      }
+    });
+
+    // Count transactions by role
+    if (user.transactions && user.transactions.length > 0) {
+      const transactionCounts = {};
+      user.roles.forEach(role => {
+        transactionCounts[role] = user.transactions.filter(
+          t => t.roleInvolved === role
+        ).length;
+      });
+      stats.transactionCounts = transactionCounts;
+    }
+
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('Get role stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+/* ======================================================
+   ADD/REMOVE ROLES (ADMIN ONLY)
+====================================================== */
+const updateUserRoles = async (req, res) => {
+  try {
+    const { userId, roles } = req.body;
+    
+    // Check if current user is admin
+    if (!req.user.roles.includes('admin')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    // Validate roles
+    const validRoles = ['farmer', 'transport', 'storage', 'admin'];
+    const invalidRoles = roles.filter(role => !validRoles.includes(role));
+    
+    if (invalidRoles.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid roles: ${invalidRoles.join(', ')}`
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { roles },
+      { new: true, runValidators: true }
+    ).select('-password -__v');
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -561,12 +846,11 @@ const getUserRatings = async (req, res) => {
 
     res.json({
       success: true,
-      ratings: user.ratings || [],
-      averageRating: user.averageRating || 0,
-      userName: user.name
+      message: 'User roles updated successfully',
+      user: formatUserResponse(user)
     });
   } catch (error) {
-    console.error('Get user ratings error:', error);
+    console.error('Update user roles error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -584,11 +868,15 @@ module.exports = {
   login,
   getProfile,
   updateProfile,
+  updateRoleProfile,
+  getUsersByRole,
   updateLocation,
   getNearbyUsers,
   logout,
   getUserById,
   submitRating,
   updateProfileDetails,
-  getUserRatings
+  getUserRatings,
+  getRoleStats,
+  updateUserRoles
 };

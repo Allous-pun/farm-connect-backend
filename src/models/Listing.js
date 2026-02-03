@@ -25,17 +25,17 @@ const ListingSchema = new mongoose.Schema(
     },
 
     // ===============================
-    // Listing Type & Category
+    // Listing Type & Category (Only agricultural products)
     // ===============================
     type: {
       type: String,
-      enum: ['surplus', 'need', 'storage', 'transport'],
+      enum: ['surplus', 'need'], // Removed 'storage', 'transport'
       required: true
     },
 
     category: {
       type: String,
-      enum: ['maize', 'milk', 'wheat', 'vegetables', 'fruits', 'livestock', 'storage', 'transport', 'other'],
+      enum: ['maize', 'milk', 'wheat', 'vegetables', 'fruits', 'livestock', 'other'],
       required: true
     },
 
@@ -45,12 +45,13 @@ const ListingSchema = new mongoose.Schema(
     productDetails: {
       quantity: {
         type: Number,
-        required: function() { return this.type !== 'transport' && this.type !== 'storage'; }
+        required: true,
+        min: 0
       },
       unit: {
         type: String,
         enum: ['kg', 'liters', 'bags', 'tons', 'units', 'crates', 'other'],
-        required: function() { return this.type !== 'transport' && this.type !== 'storage'; }
+        required: true
       },
       quality: {
         type: String,
@@ -59,11 +60,18 @@ const ListingSchema = new mongoose.Schema(
       },
       harvestDate: {
         type: Date
+      },
+      packaging: {
+        type: String,
+        trim: true
+      },
+      shelfLife: {
+        type: Number // in days
       }
     },
 
     // ===============================
-    // Price Information (Optional)
+    // Price Information
     // ===============================
     price: {
       amount: {
@@ -131,7 +139,31 @@ const ListingSchema = new mongoose.Schema(
     },
 
     // ===============================
-    // Listing Lifecycle (Section 4)
+    // Transport & Storage Requirements
+    // ===============================
+    requirements: {
+      needsTransport: {
+        type: Boolean,
+        default: false
+      },
+      needsStorage: {
+        type: Boolean,
+        default: false
+      },
+      transportDistance: {
+        type: Number // in km
+      },
+      storageDuration: {
+        type: Number // in days
+      },
+      specialRequirements: {
+        type: String,
+        trim: true
+      }
+    },
+
+    // ===============================
+    // Status & Lifecycle
     // ===============================
     status: {
       type: String,
@@ -174,6 +206,32 @@ const ListingSchema = new mongoose.Schema(
     },
 
     // ===============================
+    // Service Matches
+    // ===============================
+    matchedWith: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+
+    matchedListing: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Listing'
+    },
+
+    // ===============================
+    // Service Bookings (for transport/storage)
+    // ===============================
+    transportBooking: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transport'
+    },
+
+    storageBooking: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Storage'
+    },
+
+    // ===============================
     // Interaction Tracking
     // ===============================
     viewCount: {
@@ -184,19 +242,6 @@ const ListingSchema = new mongoose.Schema(
     chatCount: {
       type: Number,
       default: 0
-    },
-
-    // ===============================
-    // Matching Information
-    // ===============================
-    matchedWith: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-
-    matchedListing: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Listing'
     },
 
     // ===============================
@@ -252,14 +297,13 @@ const ListingSchema = new mongoose.Schema(
 // ===============================
 // Indexes (Section 5)
 // ===============================
-// Geo-spatial index for location-based queries
 ListingSchema.index({ location: '2dsphere' });
-
-// Compound indexes for common queries
 ListingSchema.index({ status: 1, type: 1, createdAt: -1 });
 ListingSchema.index({ owner: 1, status: 1, createdAt: -1 });
 ListingSchema.index({ category: 1, status: 1, urgency: 1 });
 ListingSchema.index({ expiryDate: 1, status: 1 });
+ListingSchema.index({ 'requirements.needsTransport': 1, status: 1 });
+ListingSchema.index({ 'requirements.needsStorage': 1, status: 1 });
 
 // ===============================
 // Virtuals
@@ -283,7 +327,6 @@ ListingSchema.virtual('formattedLocation').get(function() {
 });
 
 ListingSchema.virtual('primaryImage').get(function() {
-  // SAFETY CHECK - Add this!
   if (!this.images || !Array.isArray(this.images)) {
     return null;
   }
@@ -291,7 +334,6 @@ ListingSchema.virtual('primaryImage').get(function() {
   const primary = this.images.find(img => img.isPrimary);
   if (primary) return primary;
   
-  // Return first image if no primary set
   return this.images.length > 0 ? this.images[0] : null;
 });
 
@@ -316,6 +358,18 @@ ListingSchema.methods.markAsMatched = function(matchedUserId, matchedListingId) 
   return this.save();
 };
 
+ListingSchema.methods.bookTransport = function(transportId) {
+  this.transportBooking = transportId;
+  this.requirements.needsTransport = false; // Mark as fulfilled
+  return this.save();
+};
+
+ListingSchema.methods.bookStorage = function(storageId) {
+  this.storageBooking = storageId;
+  this.requirements.needsStorage = false; // Mark as fulfilled
+  return this.save();
+};
+
 ListingSchema.methods.markAsClosed = function() {
   this.status = 'closed';
   this.closedAt = new Date();
@@ -323,81 +377,28 @@ ListingSchema.methods.markAsClosed = function() {
 };
 
 ListingSchema.methods.addImage = async function(imageData) {
-  // Initialize images array if undefined
   if (!this.images) {
     this.images = [];
   }
   
-  // Validate maximum 4 images
   if (this.images.length >= 4) {
     throw new Error('Maximum of 4 images allowed per listing');
   }
   
-  // If this is the first image, set it as primary
   if (this.images.length === 0) {
     imageData.isPrimary = true;
   }
   
-  // Set order
   imageData.order = this.images.length;
   
   this.images.push(imageData);
   return this.save();
 };
 
-ListingSchema.methods.removeImage = async function(imageIndex) {
-  // Safety check
-  if (!this.images || !Array.isArray(this.images)) {
-    throw new Error('No images found');
-  }
-  
-  if (imageIndex < 0 || imageIndex >= this.images.length) {
-    throw new Error('Invalid image index');
-  }
-  
-  const removedImage = this.images[imageIndex];
-  const wasPrimary = removedImage.isPrimary;
-  
-  this.images.splice(imageIndex, 1);
-  
-  // Reorder remaining images
-  this.images.forEach((img, index) => {
-    img.order = index;
-  });
-  
-  // If primary was removed and there are other images, set first as primary
-  if (wasPrimary && this.images.length > 0) {
-    this.images[0].isPrimary = true;
-  }
-  
-  return this.save();
-};
-
-ListingSchema.methods.setPrimaryImage = async function(imageIndex) {
-  // Safety check
-  if (!this.images || !Array.isArray(this.images)) {
-    throw new Error('No images found');
-  }
-  
-  if (imageIndex < 0 || imageIndex >= this.images.length) {
-    throw new Error('Invalid image index');
-  }
-  
-  // Reset all images to non-primary
-  this.images.forEach(img => {
-    img.isPrimary = false;
-  });
-  
-  // Set selected image as primary
-  this.images[imageIndex].isPrimary = true;
-  
-  return this.save();
-};
-
 // ===============================
 // Static Methods
 // ===============================
-ListingSchema.statics.findNearby = function(coordinates, maxDistance = 20000) { // Default 20km
+ListingSchema.statics.findNearby = function(coordinates, maxDistance = 20000) {
   return this.find({
     location: {
       $near: {
@@ -427,19 +428,41 @@ ListingSchema.statics.findActiveByOwner = function(ownerId, category = null) {
   return this.find(query);
 };
 
+ListingSchema.statics.findNeedingTransport = function(county = null) {
+  const query = {
+    'requirements.needsTransport': true,
+    status: 'active',
+    expiryDate: { $gt: new Date() }
+  };
+
+  if (county) {
+    query['locationDetails.county'] = { $regex: county, $options: 'i' };
+  }
+
+  return this.find(query);
+};
+
+ListingSchema.statics.findNeedingStorage = function(county = null) {
+  const query = {
+    'requirements.needsStorage': true,
+    status: 'active',
+    expiryDate: { $gt: new Date() }
+  };
+
+  if (county) {
+    query['locationDetails.county'] = { $regex: county, $options: 'i' };
+  }
+
+  return this.find(query);
+};
+
 // ===============================
 // Middleware
 // ===============================
 ListingSchema.pre('save', function(next) {
-  // Auto-expire listings past their expiry date
   if (this.isExpired && this.status !== 'expired') {
     this.status = 'expired';
   }
-  next();
-});
-
-ListingSchema.post('save', function(doc, next) {
-  // Update user's activity or stats if needed
   next();
 });
 
