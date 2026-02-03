@@ -118,16 +118,16 @@ class RedisClient {
     }
   }
 
-  async set(key, value, expiry = null) {
-    if (!this.client.set || typeof this.client.set !== 'function') return 'OK';
+  set(key, value, ttl = null) {
+    if (!this.client.set || typeof this.client.set !== 'function') return Promise.resolve('OK');
     try {
-      if (expiry) {
-        return await this.client.setEx(key, expiry, value);
+      if (ttl) {
+        return this.client.set(key, value, 'EX', ttl);
       }
-      return await this.client.set(key, value);
+      return this.client.set(key, value);
     } catch (error) {
       console.error('Redis set error:', error);
-      return 'OK';
+      return Promise.resolve('OK');
     }
   }
 

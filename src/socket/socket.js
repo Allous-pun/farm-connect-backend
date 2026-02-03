@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const redisClient = require('../config/redis');
+const { webhookService } = require('../services/webhookService');
 
 let io;
 
@@ -68,6 +69,16 @@ const initializeSocket = (server) => {
     // Mark user as online
     await redisClient.setUserOnline(userId);
     
+    // CHANGED: Emit user.online webhook
+    await webhookService.triggerWebhook(
+      'user.online',
+      {
+        userId: socket.user._id.toString(),
+        timestamp: new Date().toISOString()
+      },
+      socket.user._id.toString()
+    ).catch(err => console.error('Webhook error:', err));
+    
     // Deliver any offline messages
     const { messageQueue } = require('../services/messageQueue');
     await messageQueue.deliverOfflineMessages(userId);
@@ -125,6 +136,19 @@ const initializeSocket = (server) => {
           isTyping,
           timestamp: new Date().toISOString()
         });
+        
+        // CHANGED: Trigger typing webhook with standardized naming
+        const eventName = isTyping ? 'typing.started' : 'typing.stopped';
+        webhookService.triggerWebhook(
+          eventName,
+          {
+            chatId,
+            userId: socket.user._id.toString(),
+            timestamp: new Date().toISOString()
+          },
+          userId
+        ).catch(err => console.error('Webhook error:', err));
+        
       } catch (error) {
         console.error('Error handling typing indicator:', error);
       }
@@ -187,14 +211,25 @@ const initializeSocket = (server) => {
       }
     });
 
-    socket.on('disconnect', async () => {
-      console.log(`User disconnected: ${userId} (${socket.user.name})`);
+    socket.on('disconnect', async (reason) => {
+      console.log(`User disconnected: ${userId} (${socket.user.name})`, reason);
       
       // Mark user as offline
       await redisClient.setUserOffline(userId);
       
       // Remove user session
       await redisClient.removeUserSession(userId);
+      
+      // CHANGED: Emit user.offline webhook
+      await webhookService.triggerWebhook(
+        'user.offline',
+        {
+          userId: socket.user._id.toString(),
+          reason: reason || 'disconnect',
+          timestamp: new Date().toISOString()
+        },
+        socket.user._id.toString()
+      ).catch(err => console.error('Webhook error:', err));
       
       // Notify contacts about offline status
       socket.broadcast.emit('user:offline', {

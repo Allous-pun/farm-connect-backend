@@ -149,12 +149,11 @@ class WebhookService {
    */
   async getUserWebhooks(userId) {
     try {
-      // Try to get from cache first
       const cacheKey = `user:${userId}:webhooks`;
       const cached = await redisClient.get(cacheKey);
       
       if (cached) {
-        return JSON.parse(cached);
+        return JSON.parse(cached);  // Should return array, not boolean
       }
       
       const webhooks = await Webhook.find({ userId }).sort({ createdAt: -1 });
@@ -162,7 +161,7 @@ class WebhookService {
       // Cache for 5 minutes
       await redisClient.set(cacheKey, JSON.stringify(webhooks), 300);
       
-      return webhooks;
+      return webhooks;  // This should be array
     } catch (error) {
       console.error('Error getting user webhooks:', error);
       throw error;
@@ -248,6 +247,7 @@ class WebhookService {
   async sendWebhook(webhook, eventType, data) {
     const startTime = Date.now();
     const payload = {
+      // CHANGED: Standardized event name with dots only, no prefixes
       event: eventType,
       data,
       timestamp: new Date().toISOString(),
@@ -273,11 +273,18 @@ class WebhookService {
     // Retry logic
     while (attempt <= this.maxRetries) {
       try {
-        const response = await axios.post(webhook.url, payload, {
-          headers,
-          timeout: this.timeout,
-          validateStatus: (status) => status >= 200 && status < 300
-        });
+        // CHANGED: Wrap axios call in try-catch with fail-silent logging
+        let response;
+        try {
+          response = await axios.post(webhook.url, payload, {
+            headers,
+            timeout: this.timeout,
+            validateStatus: (status) => status >= 200 && status < 300
+          });
+        } catch (err) {
+          console.error('[WEBHOOK FAILED]', webhook.url, err.message);
+          throw err;
+        }
         
         const duration = Date.now() - startTime;
         

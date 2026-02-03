@@ -193,12 +193,16 @@ exports.deleteChat = async (req, res) => {
       const redisClient = require('../config/redis');
       await redisClient.del(`user:${userId}:chats`);
       
-      // Trigger webhook
-      await webhookService.triggerWebhook('chat:archived', {
-        chatId,
-        userId,
-        timestamp: new Date().toISOString()
-      }, userId);
+      // Trigger webhook - CHANGED: chat.hidden instead of chat.archived
+      await webhookService.triggerWebhook(
+        'chat.hidden',
+        {
+          chatId,
+          hiddenBy: req.user.id,
+          timestamp: new Date().toISOString()
+        },
+        req.user.id
+      );
     }
 
     res.json({
@@ -299,7 +303,7 @@ exports.getOrCreateChat = async (req, res) => {
       await listing.incrementChatCount();
       
       // Trigger webhook for chat creation
-      await webhookService.triggerWebhook('chat:created', {
+      await webhookService.triggerWebhook('chat.created', {
         chatId: chat._id,
         listingId,
         participants: [req.user.id, listing.owner],
@@ -440,13 +444,19 @@ exports.getMessages = async (req, res) => {
           timestamp: new Date().toISOString()
         });
         
-        // Trigger webhook
-        await webhookService.triggerWebhook('messages:read', {
-          chatId,
-          userId,
-          messageIds: unreadIds,
-          timestamp: new Date().toISOString()
-        }, otherParticipant?.toString());
+        // Trigger webhook - CHANGED: message.read with recipient notification
+        if (otherParticipant) {
+          await webhookService.triggerWebhook(
+            'message.read',
+            {
+              chatId,
+              readerId: req.user.id,
+              messageIds: unreadIds,
+              timestamp: new Date().toISOString()
+            },
+            otherParticipant.toString()
+          );
+        }
       }
     }
 
@@ -571,8 +581,8 @@ exports.sendMessage = [
       // Increment rate limit counter
       await redisClient.set(rateLimitKey, parseInt(messageCount) + 1, 60); // Expire in 60 seconds
 
-      // Trigger webhooks (non-blocking)
-      webhookService.triggerWebhook('message:created', {
+      // Trigger webhooks - CHANGED: notify recipient with message.created, and optionally sender with self: true
+      const payload = {
         chatId,
         messageId: message._id,
         senderId: req.user.id,
@@ -580,7 +590,21 @@ exports.sendMessage = [
         text: message.text,
         type: message.type,
         timestamp: message.createdAt
-      }, req.user.id).catch(err => console.error('Webhook error:', err));
+      };
+
+      // Notify recipient
+      await webhookService.triggerWebhook(
+        'message.created',
+        payload,
+        otherParticipant._id.toString()
+      ).catch(err => console.error('Recipient webhook error:', err));
+
+      // Optional: notify sender
+      await webhookService.triggerWebhook(
+        'message.created',
+        { ...payload, self: true },
+        req.user.id
+      ).catch(err => console.error('Sender webhook error:', err));
 
       // Invalidate chat cache
       await redisClient.del(`user:${req.user.id}:chats`);
@@ -693,7 +717,7 @@ exports.sendOffer = [
       });
 
       // Trigger webhooks
-      await webhookService.triggerWebhook('offer:made', {
+      await webhookService.triggerWebhook('offer.made', {
         chatId,
         offerId: message._id,
         fromUserId: req.user.id,
@@ -826,7 +850,7 @@ exports.respondToOffer = async (req, res) => {
       );
       
       // Trigger webhook for offer acceptance
-      await webhookService.triggerWebhook('offer:accepted', {
+      await webhookService.triggerWebhook('offer.accepted', {
         chatId,
         offerId,
         listingId: listing._id,
@@ -839,7 +863,7 @@ exports.respondToOffer = async (req, res) => {
       }, req.user.id);
     } else {
       // Trigger webhook for offer rejection
-      await webhookService.triggerWebhook('offer:rejected', {
+      await webhookService.triggerWebhook('offer.rejected', {
         chatId,
         offerId,
         listingId: listing._id,
@@ -931,14 +955,14 @@ exports.updateChatStatus = async (req, res) => {
 
     // Trigger webhook
     if (status === 'blocked') {
-      await webhookService.triggerWebhook('chat:blocked', {
+      await webhookService.triggerWebhook('chat.blocked', {
         chatId,
         blockedBy: req.user.id,
         blockReason,
         timestamp: new Date().toISOString()
       }, req.user.id);
     } else if (status === 'active' && previousStatus === 'blocked') {
-      await webhookService.triggerWebhook('chat:unblocked', {
+      await webhookService.triggerWebhook('chat.unblocked', {
         chatId,
         unblockedBy: req.user.id,
         timestamp: new Date().toISOString()
@@ -1073,7 +1097,7 @@ exports.getOfflineMessages = async (req, res) => {
     const delivered = await messageQueue.deliverOfflineMessages(req.user.id);
     
     // Trigger webhook for user coming online
-    await webhookService.triggerWebhook('user:online', {
+    await webhookService.triggerWebhook('user.online', {
       userId: req.user.id,
       name: req.user.name,
       timestamp: new Date().toISOString(),
@@ -1141,13 +1165,13 @@ exports.sendTypingIndicator = async (req, res) => {
     
     // Trigger webhook for typing events
     if (isTyping) {
-      await webhookService.triggerWebhook('typing:started', {
+      await webhookService.triggerWebhook('typing.started', {
         chatId,
         userId: req.user.id,
         timestamp: new Date().toISOString()
       }, otherParticipant);
     } else {
-      await webhookService.triggerWebhook('typing:stopped', {
+      await webhookService.triggerWebhook('typing.stopped', {
         chatId,
         userId: req.user.id,
         timestamp: new Date().toISOString()

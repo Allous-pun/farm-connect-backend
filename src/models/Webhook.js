@@ -1,6 +1,26 @@
 // src/models/Webhook.js
 const mongoose = require('mongoose');
 
+// CHANGED: Updated event list with dots instead of colons
+const validEvents = [
+  'message.created',
+  'message.read',
+  'chat.created',
+  'chat.hidden',
+  'offer.made',
+  'offer.accepted',
+  'offer.rejected',
+  'user.online',
+  'user.offline',
+  'typing.started',
+  'typing.stopped',
+  'chat.blocked',
+  'chat.unblocked',
+  'listing.matched',
+  'test',
+  '*' // Wildcard for all events
+];
+
 const WebhookSchema = new mongoose.Schema(
   {
     userId: {
@@ -54,24 +74,7 @@ const WebhookSchema = new mongoose.Schema(
     events: [{
       type: String,
       required: true,
-      enum: [
-        'message:created',
-        'message:read',
-        'chat:created',
-        'chat:archived',
-        'offer:made',
-        'offer:accepted',
-        'offer:rejected',
-        'user:online',
-        'user:offline',
-        'typing:started',
-        'typing:stopped',
-        'chat:blocked',
-        'chat:unblocked',
-        'listing:matched',
-        'test',
-        '*' // Wildcard for all events
-      ]
+      enum: validEvents
     }],
     
     enabled: {

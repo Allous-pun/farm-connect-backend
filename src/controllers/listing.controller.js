@@ -1,6 +1,8 @@
+// src/controllers/listing.controller.js
 const Listing = require('../models/Listing');
 const User = require('../models/User');
 const mongoose = require('mongoose');
+const { webhookService } = require('../services/webhookService');
 
 // Same COUNTY_COORDS as in User model for consistency
 const COUNTY_COORDS = {
@@ -566,6 +568,19 @@ exports.markAsMatched = async (req, res) => {
     }
 
     await listing.markAsMatched(matchedWith, matchedListing);
+
+    // Trigger webhook for listing match
+    await webhookService.triggerWebhook(
+      'listing.matched',
+      {
+        listingId: listing._id,
+        matchedWith: matchedWith,
+        matchedListing: matchedListing,
+        owner: listing.owner,
+        timestamp: new Date().toISOString()
+      },
+      listing.owner.toString()
+    ).catch(err => console.error('Webhook error:', err));
 
     res.json({
       success: true,

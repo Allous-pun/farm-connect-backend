@@ -9,48 +9,32 @@ const Joi = require('joi');
 // All routes require authentication
 router.use(protect);
 
+// CHANGED: Updated event list with dots instead of colons
+const validEvents = [
+  'message.created',
+  'message.read',
+  'chat.created',
+  'chat.hidden',
+  'offer.made',
+  'offer.accepted',
+  'offer.rejected',
+  'user.online',
+  'user.offline',
+  'typing.started',
+  'typing.stopped',
+  'chat.blocked',
+  'chat.unblocked',
+  'listing.matched',
+  'test',
+  '*'
+];
+
 // Validation schemas
 const registerWebhookSchema = Joi.object({
   url: Joi.string().uri().required().max(500),
   events: Joi.alternatives().try(
-    Joi.string().valid(
-      'message:created',
-      'message:read',
-      'chat:created',
-      'chat:archived',
-      'offer:made',
-      'offer:accepted',
-      'offer:rejected',
-      'user:online',
-      'user:offline',
-      'typing:started',
-      'typing:stopped',
-      'chat:blocked',
-      'chat:unblocked',
-      'listing:matched',
-      'test',
-      '*'
-    ),
-    Joi.array().items(
-      Joi.string().valid(
-        'message:created',
-        'message:read',
-        'chat:created',
-        'chat:archived',
-        'offer:made',
-        'offer:accepted',
-        'offer:rejected',
-        'user:online',
-        'user:offline',
-        'typing:started',
-        'typing:stopped',
-        'chat:blocked',
-        'chat:unblocked',
-        'listing:matched',
-        'test',
-        '*'
-      )
-    )
+    Joi.string().valid(...validEvents),
+    Joi.array().items(Joi.string().valid(...validEvents))
   ).required(),
   name: Joi.string().max(100).required(),
   secret: Joi.string().max(100).optional(),
@@ -64,44 +48,8 @@ const registerWebhookSchema = Joi.object({
 const updateWebhookSchema = Joi.object({
   url: Joi.string().uri().max(500).optional(),
   events: Joi.alternatives().try(
-    Joi.string().valid(
-      'message:created',
-      'message:read',
-      'chat:created',
-      'chat:archived',
-      'offer:made',
-      'offer:accepted',
-      'offer:rejected',
-      'user:online',
-      'user:offline',
-      'typing:started',
-      'typing:stopped',
-      'chat:blocked',
-      'chat:unblocked',
-      'listing:matched',
-      'test',
-      '*'
-    ),
-    Joi.array().items(
-      Joi.string().valid(
-        'message:created',
-        'message:read',
-        'chat:created',
-        'chat:archived',
-        'offer:made',
-        'offer:accepted',
-        'offer:rejected',
-        'user:online',
-        'user:offline',
-        'typing:started',
-        'typing:stopped',
-        'chat:blocked',
-        'chat:unblocked',
-        'listing:matched',
-        'test',
-        '*'
-      )
-    )
+    Joi.string().valid(...validEvents),
+    Joi.array().items(Joi.string().valid(...validEvents))
   ).optional(),
   name: Joi.string().max(100).optional(),
   description: Joi.string().max(500).optional(),
