@@ -108,6 +108,7 @@ exports.getListings = async (req, res) => {
       owner,
       needsTransport,
       needsStorage,
+      includeSelf = 'false',
       page = 1,
       limit = 20,
       sortBy = 'createdAt',
@@ -138,8 +139,9 @@ exports.getListings = async (req, res) => {
     // Owner filter
     if (owner) {
       query.owner = owner;
-    } else if (!req.user.roles.includes('admin')) {
+    } else if (!req.user.roles.includes('admin') && includeSelf !== 'true') {
       // For non-admins, exclude their own listings by default
+      // Unless includeSelf=true is specified
       query.owner = { $ne: req.user.id };
     }
 
@@ -321,6 +323,7 @@ exports.getNearbyListings = async (req, res) => {
       urgency,
       needsTransport,
       needsStorage,
+      includeSelf = 'false',
       sortBy = 'distance',
       limit = 50
     } = req.query;
@@ -346,9 +349,13 @@ exports.getNearbyListings = async (req, res) => {
         }
       },
       status: 'active',
-      expiryDate: { $gt: new Date() },
-      owner: { $ne: req.user.id } // Exclude user's own listings
+      expiryDate: { $gt: new Date() }
     };
+
+    // Only exclude user's own listings if includeSelf is false
+    if (includeSelf !== 'true') {
+      query.owner = { $ne: req.user.id };
+    }
 
     // Apply filters
     if (type) query.type = type;

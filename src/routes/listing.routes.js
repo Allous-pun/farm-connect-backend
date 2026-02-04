@@ -1,70 +1,109 @@
-const express = require('express');
-const router = express.Router();
-const listingController = require('../controllers/listing.controller');
-const imageController = require('../controllers/image.controller');
-const upload = require('../config/multer');
-const { protect } = require('../middlewares/auth.middleware');
-const { authorize } = require('../middlewares/role.middleware');
+// @desc    Get marketplace listings (includes own listings)
+// @route   GET /api/listings/marketplace
+// @access  Private
+exports.getMarketplaceListings = async (req, res) => {
+  try {
+    const { 
+      lat, 
+      lng, 
+      maxDistance = 50000,
+      type,
+      category,
+      urgency,
+      needsTransport,
+      needsStorage,
+      page = 1,
+      limit = 20,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
 
-// Apply authentication middleware to all routes
-router.use(protect);
+    // Use provided coordinates or user's coordinates
+    let coordinates;
+    if (lat && lng) {
+      coordinates = [parseFloat(lng), parseFloat(lat)];
+    } else {
+      const user = await User.findById(req.user.id);
+      coordinates = user.coordinates.coordinates;
+    }
 
-// Product listing routes
-router.route('/')
-  .get(listingController.getListings)
-  .post(authorize('farmer'), listingController.createListing);
+    // Build query for active listings within distance
+    const query = {
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates
+          },
+          $maxDistance: parseInt(maxDistance)
+        }
+      },
+      status: 'active',
+      expiryDate: { $gt: new Date() }
+      // Note: We don't exclude own listings here - marketplace shows everything
+    };
 
-router.route('/nearby')
-  .get(listingController.getNearbyListings);
+    // Apply filters
+    if (type) query.type = type;
+    if (category) query.category = category;
+    if (urgency) query.urgency = urgency;
+    if (needsTransport) query['requirements.needsTransport'] = needsTransport === 'true';
+    if (needsStorage) query['requirements.needsStorage'] = needsStorage === 'true';
 
-router.route('/needing-transport')
-  .get(authorize('transport'), listingController.getListingsNeedingTransport);
+    // Build sort
+    const sort = {};
+    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
-router.route('/needing-storage')
-  .get(authorize('storage'), listingController.getListingsNeedingStorage);
+    // Pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-router.route('/my-listings')
-  .get(listingController.getMyListings);
+    const listings = await Listing.find(query)
+      .populate('owner', 'name roles averageRating profileStatus')
+      .populate('transportBooking', 'title route')
+      .populate('storageBooking', 'title locationDetails')
+      .populate('matchedWith', 'name')
+      .populate('matchedListing', 'title category')
+      .sort(sort)
+      .skip(skip)
+      .limit(parseInt(limit));
 
-router.route('/search')
-  .get(listingController.searchListings);
+    const total = await Listing.countDocuments(query);
 
-router.route('/map-view')
-  .get(listingController.getMapListings);
+    // Calculate distances
+    const user = await User.findById(req.user.id);
+    const listingsWithDistance = listings.map(listing => {
+      const listingObj = listing.toObject();
+      
+      if (user?.coordinates?.coordinates && listing.location?.coordinates) {
+        listingObj.distance = calculateDistance(
+          user.coordinates.coordinates[1], // lat
+          user.coordinates.coordinates[0], // lng
+          listing.location.coordinates[1], // listing lat
+          listing.location.coordinates[0]  // listing lng
+        );
+      }
+      
+      return listingObj;
+    });
 
-// Image routes
-router.route('/:id/images')
-  .post(upload.array('images', 4), imageController.uploadImages);
+    res.json({
+      success: true,
+      count: listings.length,
+      total,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      },
+      data: listingsWithDistance
+    });
 
-router.route('/:id/images/:imageIndex')
-  .delete(imageController.removeImage);
-
-router.route('/:id/images/:imageIndex/set-primary')
-  .put(imageController.setPrimaryImage);
-
-router.route('/:id/images/reorder')
-  .put(imageController.reorderImages);
-
-// Single listing routes
-router.route('/:id')
-  .get(listingController.getListing)
-  .put(listingController.updateListing)
-  .delete(listingController.deleteListing);
-
-router.route('/:id/close')
-  .put(listingController.closeListing);
-
-router.route('/:id/match')
-  .put(listingController.markAsMatched);
-
-router.route('/:id/contact')
-  .post(listingController.contactOwner);
-
-// Service recommendations
-router.route('/:id/recommended-transports')
-  .get(authorize('farmer'), listingController.getRecommendedTransports);
-
-router.route('/:id/recommended-storages')
-  .get(authorize('farmer'), listingController.getRecommendedStorages);
-
-module.exports = router;
+  } catch (error) {
+    console.error('Get marketplace listings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching marketplace listings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
