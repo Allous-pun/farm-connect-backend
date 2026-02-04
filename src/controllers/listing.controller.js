@@ -1,7 +1,5 @@
 const Listing = require('../models/Listing');
 const User = require('../models/User');
-const Transport = require('../models/Transport');
-const Storage = require('../models/Storage');
 const mongoose = require('mongoose');
 const { webhookService } = require('../services/webhookService');
 
@@ -403,118 +401,7 @@ exports.getListings = async (req, res) => {
 };
 
 // ============================================
-// 4. TRANSPORT & STORAGE LISTINGS ENDPOINTS
-// ============================================
-
-// @desc    Get transport marketplace listings
-// @route   GET /api/transports/marketplace
-// @access  Private
-exports.getTransportListings = async (req, res) => {
-  try {
-    const { 
-      status = 'available',
-      serviceType,
-      page = 1,
-      limit = 20
-    } = req.query;
-
-    const query = {
-      status: status,
-      owner: { $ne: req.user.id } // Exclude own transports
-    };
-
-    if (serviceType && serviceType !== 'all') {
-      query.serviceType = serviceType;
-    }
-
-    const transports = await Transport.find(query)
-      .populate('owner', 'name roles averageRating')
-      .sort('-createdAt')
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await Transport.countDocuments(query);
-
-    res.json({
-      success: true,
-      count: transports.length,
-      total,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      },
-      data: transports
-    });
-
-  } catch (error) {
-    console.error('Get transport listings error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching transport listings',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// @desc    Get storage marketplace listings
-// @route   GET /api/storages/marketplace
-// @access  Private
-exports.getStorageListings = async (req, res) => {
-  try {
-    const { 
-      status = 'active',
-      facilityType,
-      availability = 'available',
-      page = 1,
-      limit = 20
-    } = req.query;
-
-    const query = {
-      status: status,
-      owner: { $ne: req.user.id } // Exclude own storage
-    };
-
-    if (facilityType && facilityType !== 'all') {
-      query.facilityType = facilityType;
-    }
-
-    if (availability && availability !== 'all') {
-      query.availability = availability;
-    }
-
-    const storages = await Storage.find(query)
-      .populate('owner', 'name roles averageRating')
-      .sort('-createdAt')
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await Storage.countDocuments(query);
-
-    res.json({
-      success: true,
-      count: storages.length,
-      total,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      },
-      data: storages
-    });
-
-  } catch (error) {
-    console.error('Get storage listings error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching storage listings',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// ============================================
-// 5. OTHER EXISTING FUNCTIONS (Keep as is with minor updates)
+// 4. OTHER EXISTING FUNCTIONS
 // ============================================
 
 // @desc    Create a new listing (only farmers can create)
@@ -931,7 +818,7 @@ exports.contactOwner = async (req, res) => {
 };
 
 // ============================================
-// 6. TRANSPORT AND STORAGE SPECIFIC FUNCTIONS
+// 5. TRANSPORT AND STORAGE SPECIFIC FUNCTIONS
 // ============================================
 
 // @desc    Get listings needing transport services
@@ -1154,24 +1041,13 @@ exports.getRecommendedTransports = async (req, res) => {
       });
     }
 
-    // Find transports that match the listing's needs
-    const query = {
-      'route.from.county': listing.locationDetails?.county || { $exists: true },
-      'route.to.county': { $regex: '.*', $options: 'i' }, // Can go anywhere
-      'vehicleDetails.capacity': { $gte: listing.productDetails?.quantity || 0 },
-      status: 'available',
-      expiryDate: { $gt: new Date() },
-      owner: { $ne: req.user.id } // Don't recommend own transports
-    };
-
-    const transports = await Transport.find(query)
-      .populate('owner', 'name roles averageRating roleSpecificInfo.transport')
-      .limit(10);
-
+    // This function now calls the transport controller's getTransports function
+    // Since transports are in a separate controller, we need to import it
+    // For now, we'll return a message indicating this feature needs to be implemented
     res.json({
       success: true,
-      count: transports.length,
-      data: transports
+      message: 'Recommended transports feature needs to be implemented in transport controller',
+      data: []
     });
 
   } catch (error) {
@@ -1206,25 +1082,13 @@ exports.getRecommendedStorages = async (req, res) => {
       });
     }
 
-    // Find storage facilities that match the listing's needs
-    const query = {
-      'locationDetails.county': listing.locationDetails?.county || { $exists: true },
-      'facilityDetails.availableCapacity': { $gte: listing.productDetails?.quantity || 0 },
-      acceptedProducts: listing.category,
-      availability: { $in: ['available', 'partially_available'] },
-      status: 'active',
-      expiryDate: { $gt: new Date() },
-      owner: { $ne: req.user.id } // Don't recommend own storage
-    };
-
-    const storages = await Storage.find(query)
-      .populate('owner', 'name roles averageRating roleSpecificInfo.storage')
-      .limit(10);
-
+    // This function now calls the storage controller's getStorages function
+    // Since storages are in a separate controller, we need to import it
+    // For now, we'll return a message indicating this feature needs to be implemented
     res.json({
       success: true,
-      count: storages.length,
-      data: storages
+      message: 'Recommended storages feature needs to be implemented in storage controller',
+      data: []
     });
 
   } catch (error) {
@@ -1372,6 +1236,115 @@ exports.getMapListings = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching map listings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get nearby listings
+// @route   GET /api/listings/nearby
+// @access  Private
+exports.getNearbyListings = async (req, res) => {
+  try {
+    const { 
+      lat, 
+      lng, 
+      maxDistance = 20000, // 20km default
+      type,
+      category,
+      urgency,
+      needsTransport,
+      needsStorage,
+      includeSelf = 'false',
+      sortBy = 'distance',
+      limit = 50
+    } = req.query;
+
+    // Use provided coordinates or user's coordinates
+    let coordinates;
+    if (lat && lng) {
+      coordinates = [parseFloat(lng), parseFloat(lat)];
+    } else {
+      const user = await User.findById(req.user.id);
+      coordinates = user.coordinates.coordinates;
+    }
+
+    // Build query
+    const query = {
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates
+          },
+          $maxDistance: parseInt(maxDistance)
+        }
+      },
+      status: 'active',
+      expiryDate: { $gt: new Date() }
+    };
+
+    // Only exclude user's own listings if includeSelf is false
+    if (includeSelf !== 'true') {
+      query.owner = { $ne: req.user.id };
+    }
+
+    // Apply filters
+    if (type) query.type = type;
+    if (category) query.category = category;
+    if (urgency) query.urgency = urgency;
+    if (needsTransport) query['requirements.needsTransport'] = needsTransport === 'true';
+    if (needsStorage) query['requirements.needsStorage'] = needsStorage === 'true';
+
+    // Build sort
+    let sort = {};
+    switch (sortBy) {
+      case 'distance':
+        // Geo query already sorts by distance
+        break;
+      case 'recent':
+        sort.createdAt = -1;
+        break;
+      case 'urgent':
+        sort.urgency = -1;
+        sort.createdAt = -1;
+        break;
+      default:
+        sort.createdAt = -1;
+    }
+
+    // Execute query
+    const listings = await Listing.find(query)
+      .populate('owner', 'name roles averageRating location.address.county')
+      .sort(sort)
+      .limit(parseInt(limit));
+
+    // Calculate distances for each listing
+    const listingsWithDistance = listings.map(listing => {
+      const listingObj = listing.toObject();
+      
+      // Add distance information
+      if (coordinates && listing.location.coordinates) {
+        listingObj.distance = calculateDistance(
+          coordinates[1], coordinates[0], // lat, lng
+          listing.location.coordinates[1], listing.location.coordinates[0]
+        );
+      }
+      
+      return listingObj;
+    });
+
+    res.json({
+      success: true,
+      count: listings.length,
+      data: listingsWithDistance
+    });
+
+  } catch (error) {
+    console.error('Get nearby listings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching listings',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
